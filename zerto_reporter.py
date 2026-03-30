@@ -604,12 +604,18 @@ def main() -> None:
     # --- Filter docs to this region only ---
     log.info("Indexing %s data to Elasticsearch (snapshot_id: %s) ...", region.upper(), snapshot_id)
 
+    all_item_docs = es_snapshot_zerto_item(vm_docs, vpg_docs, snapshot_id)
+    for d in all_item_docs:
+        log.info("VM doc: vm=%s  zorg=%s  region=%s", d.get("vm_name"), d.get("zorg_name"), zorg_region(d.get("zorg_name")))
+
     vpg_es_docs  = [d for d in es_snapshot_zerto_vpg(vpg_docs, snapshot_id)
                     if zorg_region(d.get("zorg_name")) == region]
-    item_es_docs = [d for d in es_snapshot_zerto_item(vm_docs, vpg_docs, snapshot_id)
-                    if zorg_region(d.get("zorg_name")) == region]
+    item_es_docs = [d for d in all_item_docs if zorg_region(d.get("zorg_name")) == region]
     site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id)
                     if (d.get("site_name") or "").lower().startswith(region)]
+
+    log.info("Filtered counts — sites: %d  VPGs: %d  VMs: %d",
+             len(site_es_docs), len(vpg_es_docs), len(item_es_docs))
 
     index_to_es(es, "snapshot_zerto",      site_es_docs)
     index_to_es(es, "snapshot_zerto_vpg",  vpg_es_docs)
