@@ -16,8 +16,8 @@ Note: VPG priority is not exposed in the Zerto Analytics API.
       Use the ZVM REST API if priority is required.
 
 Usage:
-    Set environment variables (see Configuration section below), then run:
-        python zerto_reporter.py
+    python zerto_reporter.py --region uk
+    python zerto_reporter.py --region us
 
 Environment variables (set on the VM):
     AZURE_VAULT_URL       - Azure Key Vault URL (e.g. https://kv-zerto-collector.vault.azure.net)
@@ -35,6 +35,7 @@ Secrets loaded from Azure Key Vault (Managed Identity):
     es-us-api-key       - US Elasticsearch API key
 """
 
+import argparse
 import logging
 import os
 import sys
@@ -506,11 +507,8 @@ def es_snapshot_zerto_item(vm_docs: list, vpg_docs: list, snapshot_id: str) -> l
 # Elasticsearch helpers
 # ---------------------------------------------------------------------------
 
-def get_es_client(host: str, api_key: str) -> Elasticsearch:
-    kwargs = {"hosts": [host]}
-    # if api_key:
-    #     kwargs["api_key"] = api_key
-    return Elasticsearch(**kwargs)
+def get_es_client(host: str) -> Elasticsearch:
+    return Elasticsearch(hosts=[host])
 
 
 def zorg_region(zorg_name: Optional[str]) -> str:
@@ -525,10 +523,6 @@ def zorg_region(zorg_name: Optional[str]) -> str:
     return "unknown"
 
 
-US_ES_INSTANCE  = "http://10.51.22.15:9200"
-US_PROXY_URL    = "http://10.51.21.40:5001"
-
-
 def index_to_es(es: Elasticsearch, index: str, docs: list) -> None:
     if not docs:
         log.info("No documents to index for %s.", index)
@@ -540,68 +534,38 @@ def index_to_es(es: Elasticsearch, index: str, docs: list) -> None:
         log.error("Bulk index error: %s", err)
 
 
-def index_via_proxy(index: str, docs: list) -> None:
-    """Index documents to the US Elasticsearch instance via the proxy API."""
-    if not docs:
-        log.info("No documents to index for %s (proxy).", index)
-        return
-    success = 0
-    errors  = 0
-    for doc in docs:
-        payload = {
-            "method":     "ElasticSearch",
-            "esInstance": US_ES_INSTANCE,
-            "esIndex":    index,
-            "esQuery":    doc,
-        }
-        try:
-            resp = requests.post(US_PROXY_URL, json=payload, timeout=30)
-            if not resp.ok:
-                log.error("Proxy error for '%s': %s — %s", index, resp.status_code, resp.text)
-            resp.raise_for_status()
-            success += 1
-        except requests.RequestException as exc:
-            log.error("Proxy index error for '%s': %s", index, exc)
-            errors += 1
-    log.info("Indexed %d documents into '%s' via proxy (%d errors).", success, index, errors)
-
-
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Zerto Analytics → Elasticsearch collector")
+    parser.add_argument("--region", choices=["uk", "us"], required=True,
+                        help="Which region's ES instance to write to (uk or us)")
+    args = parser.parse_args()
+    region = args.region
+
     if not AZURE_VAULT_URL:
         log.error("AZURE_VAULT_URL environment variable must be set.")
         sys.exit(1)
 
-    # --- Load all secrets from Azure Key Vault ---
+    # --- Load secrets from Azure Key Vault ---
     log.info("Loading secrets from Azure Key Vault ...")
     secrets = load_secrets(AZURE_VAULT_URL)
     zerto_username = secrets["zerto-username"]
     zerto_password = secrets["zerto-password"]
-    es_uk_host     = secrets["es-uk-host"]
-    # es_uk_api_key  = secrets["es-uk-api-key"]
+    es_host = secrets[f"es-{region}-host"]
 
     now = datetime.now(tz=timezone.utc)
     report_start = now - timedelta(hours=REPORT_HOURS)
     start_str = _date_str(report_start)
     end_str = _date_str(now)
     snapshot_id = str(uuid.uuid4())
-    log.info("Snapshot ID: %s", snapshot_id)
+    log.info("Region: %s  |  Snapshot ID: %s", region.upper(), snapshot_id)
 
-    # --- Connect to UK Elasticsearch (direct) ---
-    log.info("Connecting to UK Elasticsearch at %s ...", es_uk_host)
-    es_uk = get_es_client(es_uk_host, None)
-    if not es_uk.ping():
-        log.error("Cannot reach UK Elasticsearch at %s.", es_uk_host)
+    # --- Connect to Elasticsearch ---
+    log.info("Connecting to Elasticsearch at %s ...", es_host)
+    es = get_es_client(es_host)
+    if not es.ping():
+        log.error("Cannot reach Elasticsearch at %s.", es_host)
         sys.exit(1)
-    log.info("UK Elasticsearch connection OK.")
-
-    # --- Check US proxy is reachable ---
-    log.info("Checking US proxy at %s ...", US_PROXY_URL)
-    try:
-        requests.get(US_PROXY_URL, timeout=10)
-        log.info("US proxy OK.")
-    except requests.RequestException as exc:
-        log.error("Cannot reach US proxy at %s: %s", US_PROXY_URL, exc)
-        sys.exit(1)
+    log.info("Elasticsearch connection OK.")
 
     # --- Connect to Zerto Analytics API ---
     zerto = ZertoAnalyticsClient(zerto_username, zerto_password)
@@ -637,46 +601,19 @@ def main() -> None:
     # --- Print hierarchy ---
     print_hierarchy(account_doc, site_docs, vpg_docs, vm_docs)
 
-    # --- Index to Elasticsearch, routed by ZORG prefix ---
-    log.info("Indexing to Elasticsearch (snapshot_id: %s) ...", snapshot_id)
+    # --- Filter docs to this region only ---
+    log.info("Indexing %s data to Elasticsearch (snapshot_id: %s) ...", region.upper(), snapshot_id)
 
-    # Split VPG and VM docs by region
-    vpg_by_region:  dict = {"uk": [], "us": [], "unknown": []}
-    item_by_region: dict = {"uk": [], "us": [], "unknown": []}
+    vpg_es_docs  = [d for d in es_snapshot_zerto_vpg(vpg_docs, snapshot_id)
+                    if zorg_region(d.get("zorg_name")) == region]
+    item_es_docs = [d for d in es_snapshot_zerto_item(vm_docs, vpg_docs, snapshot_id)
+                    if zorg_region(d.get("zorg_name")) == region]
+    site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id)
+                    if (d.get("site_name") or "").lower().startswith(region)]
 
-    for doc in es_snapshot_zerto_vpg(vpg_docs, snapshot_id):
-        vpg_by_region[zorg_region(doc.get("zorg_name"))].append(doc)
-
-    for doc in es_snapshot_zerto_item(vm_docs, vpg_docs, snapshot_id):
-        item_by_region[zorg_region(doc.get("zorg_name"))].append(doc)
-
-    # Sites are routed by their name prefix (UKDC* → uk, USDC* → us)
-    site_es_docs = es_snapshot_zerto(site_docs, account_doc, snapshot_id)
-    site_by_region: dict = {"uk": [], "us": [], "unknown": []}
-    for doc in site_es_docs:
-        name = (doc.get("site_name") or "").lower()
-        if name.startswith("uk"):
-            site_by_region["uk"].append(doc)
-        elif name.startswith("us"):
-            site_by_region["us"].append(doc)
-        else:
-            log.warning("Site '%s' could not be routed (name doesn't start with uk/us) — skipped.", doc.get("site_name"))
-            site_by_region["unknown"].append(doc)
-
-    log.info("Writing UK data ...")
-    index_to_es(es_uk, "snapshot_zerto",      site_by_region["uk"])
-    index_to_es(es_uk, "snapshot_zerto_vpg",  vpg_by_region["uk"])
-    index_to_es(es_uk, "snapshot_zerto_item", item_by_region["uk"])
-
-    log.info("Writing US data (via proxy) ...")
-    index_via_proxy("snapshot_zerto",      site_by_region["us"])
-    index_via_proxy("snapshot_zerto_vpg",  vpg_by_region["us"])
-    index_via_proxy("snapshot_zerto_item", item_by_region["us"])
-
-    # Warn about any docs that couldn't be routed
-    for collection, by_region in [("sites", site_by_region), ("VPGs", vpg_by_region), ("VMs", item_by_region)]:
-        if by_region["unknown"]:
-            log.warning("%d %s could not be routed (ZORG prefix not ukcu/uscu) — skipped.", len(by_region["unknown"]), collection)
+    index_to_es(es, "snapshot_zerto",      site_es_docs)
+    index_to_es(es, "snapshot_zerto_vpg",  vpg_es_docs)
+    index_to_es(es, "snapshot_zerto_item", item_es_docs)
 
     log.info("Done.")
 
