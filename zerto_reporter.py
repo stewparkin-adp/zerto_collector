@@ -524,6 +524,10 @@ def zorg_region(zorg_name: Optional[str]) -> str:
     return "unknown"
 
 
+US_ES_INSTANCE  = "http://10.51.22.15:9200"
+US_PROXY_URL    = "http://10.51.21.40:5001"
+
+
 def index_to_es(es: Elasticsearch, index: str, docs: list) -> None:
     if not docs:
         log.info("No documents to index for %s.", index)
@@ -533,6 +537,30 @@ def index_to_es(es: Elasticsearch, index: str, docs: list) -> None:
     log.info("Indexed %d documents into '%s' (%d errors).", success, index, len(errors))
     for err in errors:
         log.error("Bulk index error: %s", err)
+
+
+def index_via_proxy(index: str, docs: list) -> None:
+    """Index documents to the US Elasticsearch instance via the proxy API."""
+    if not docs:
+        log.info("No documents to index for %s (proxy).", index)
+        return
+    success = 0
+    errors  = 0
+    for doc in docs:
+        payload = {
+            "method":     "ElasticSearch",
+            "esInstance": US_ES_INSTANCE,
+            "esIndex":    index,
+            "esQuery":    doc,
+        }
+        try:
+            resp = requests.post(US_PROXY_URL, json=payload, timeout=30)
+            resp.raise_for_status()
+            success += 1
+        except requests.RequestException as exc:
+            log.error("Proxy index error for '%s': %s", index, exc)
+            errors += 1
+    log.info("Indexed %d documents into '%s' via proxy (%d errors).", success, index, errors)
 
 
 def main() -> None:
@@ -632,9 +660,14 @@ def main() -> None:
 
     for region, es in es_clients.items():
         log.info("Writing %s data ...", region.upper())
-        index_to_es(es, "snapshot_zerto",      site_by_region[region])
-        index_to_es(es, "snapshot_zerto_vpg",  vpg_by_region[region])
-        index_to_es(es, "snapshot_zerto_item", item_by_region[region])
+        if region == "us":
+            index_via_proxy("snapshot_zerto",      site_by_region[region])
+            index_via_proxy("snapshot_zerto_vpg",  vpg_by_region[region])
+            index_via_proxy("snapshot_zerto_item", item_by_region[region])
+        else:
+            index_to_es(es, "snapshot_zerto",      site_by_region[region])
+            index_to_es(es, "snapshot_zerto_vpg",  vpg_by_region[region])
+            index_to_es(es, "snapshot_zerto_item", item_by_region[region])
 
     # Warn about any docs that couldn't be routed
     for collection, by_region in [("sites", site_by_region), ("VPGs", vpg_by_region), ("VMs", item_by_region)]:
