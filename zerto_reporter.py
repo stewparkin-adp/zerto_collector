@@ -591,7 +591,6 @@ def main() -> None:
         log.error("Cannot reach UK Elasticsearch at %s.", es_uk_host)
         sys.exit(1)
     log.info("UK Elasticsearch connection OK.")
-    es_clients = {"uk": es_uk}
 
     # --- Check US proxy is reachable ---
     log.info("Checking US proxy at %s ...", US_PROXY_URL)
@@ -662,16 +661,15 @@ def main() -> None:
             log.warning("Site '%s' could not be routed (name doesn't start with uk/us) — skipped.", doc.get("site_name"))
             site_by_region["unknown"].append(doc)
 
-    for region, es in es_clients.items():
-        log.info("Writing %s data ...", region.upper())
-        if region == "us":
-            index_via_proxy("snapshot_zerto",      site_by_region[region])
-            index_via_proxy("snapshot_zerto_vpg",  vpg_by_region[region])
-            index_via_proxy("snapshot_zerto_item", item_by_region[region])
-        else:
-            index_to_es(es, "snapshot_zerto",      site_by_region[region])
-            index_to_es(es, "snapshot_zerto_vpg",  vpg_by_region[region])
-            index_to_es(es, "snapshot_zerto_item", item_by_region[region])
+    log.info("Writing UK data ...")
+    index_to_es(es_uk, "snapshot_zerto",      site_by_region["uk"])
+    index_to_es(es_uk, "snapshot_zerto_vpg",  vpg_by_region["uk"])
+    index_to_es(es_uk, "snapshot_zerto_item", item_by_region["uk"])
+
+    log.info("Writing US data (via proxy) ...")
+    index_via_proxy("snapshot_zerto",      site_by_region["us"])
+    index_via_proxy("snapshot_zerto_vpg",  vpg_by_region["us"])
+    index_via_proxy("snapshot_zerto_item", item_by_region["us"])
 
     # Warn about any docs that couldn't be routed
     for collection, by_region in [("sites", site_by_region), ("VPGs", vpg_by_region), ("VMs", item_by_region)]:
