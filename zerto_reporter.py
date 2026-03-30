@@ -556,6 +556,8 @@ def index_via_proxy(index: str, docs: list) -> None:
         }
         try:
             resp = requests.post(US_PROXY_URL, json=payload, timeout=30)
+            if not resp.ok:
+                log.error("Proxy error for '%s': %s — %s", index, resp.status_code, resp.text)
             resp.raise_for_status()
             success += 1
         except requests.RequestException as exc:
