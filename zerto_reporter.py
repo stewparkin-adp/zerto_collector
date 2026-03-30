@@ -611,17 +611,6 @@ def main() -> None:
     site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id)
                     if (d.get("site_name") or "").lower().startswith(region)]
 
-    import json
-    for label, docs in [
-        ("snapshot_zerto",      site_es_docs),
-        ("snapshot_zerto_vpg",  vpg_es_docs),
-        ("snapshot_zerto_item", item_es_docs),
-    ]:
-        print(f"\n{'=' * 60}\n  INDEX: {label}  ({len(docs)} documents)\n{'=' * 60}")
-        for doc in docs:
-            print(json.dumps(doc, indent=2, default=str))
-            print("-" * 60)
-
     index_to_es(es, "snapshot_zerto",      site_es_docs)
     index_to_es(es, "snapshot_zerto_vpg",  vpg_es_docs)
     index_to_es(es, "snapshot_zerto_item", item_es_docs)
