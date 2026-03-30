@@ -474,29 +474,30 @@ def es_snapshot_zerto_vpg(vpg_docs: list, snapshot_id: str) -> list:
 def es_snapshot_zerto_item(vm_docs: list, vpg_docs: list, snapshot_id: str) -> list:
     """One document per VM for the snapshot_zerto_item index.
     Each VM is linked to its VPG(s) via vpg_id and snapshot_id."""
-    # Build vpg_name -> vpg_id lookup
-    vpg_id_by_name = {v["vpg_name"]: v["vpg_id"] for v in vpg_docs if v.get("vpg_name")}
+    vpg_id_by_name   = {v["vpg_name"]: v["vpg_id"]   for v in vpg_docs if v.get("vpg_name")}
+    # Fall back to VPG's zorg if the VM-level zorg is missing
+    vpg_zorg_by_name = {v["vpg_name"]: v["zorg_name"] for v in vpg_docs if v.get("vpg_name")}
 
     docs = []
     for vm in vm_docs:
-        # A VM can belong to multiple VPGs — emit one doc per VPG relationship
         vpg_names = vm.get("vpg_names") or []
         if not vpg_names:
             vpg_names = [None]
         for vpg_name in vpg_names:
+            zorg = vm.get("zorg_name") or vpg_zorg_by_name.get(vpg_name)
             docs.append({
-                "snapshot_id":          snapshot_id,
-                "@timestamp":           vm["@timestamp"],
-                "vm_id":                vm["vm_id"],
-                "vm_name":              vm["vm_name"],
-                "vpg_name":             vpg_name,
-                "vpg_id":               vpg_id_by_name.get(vpg_name),
-                "zorg_name":            vm["zorg_name"],
+                "snapshot_id":            snapshot_id,
+                "@timestamp":             vm["@timestamp"],
+                "vm_id":                  vm["vm_id"],
+                "vm_name":                vm["vm_name"],
+                "vpg_name":               vpg_name,
+                "vpg_id":                 vpg_id_by_name.get(vpg_name),
+                "zorg_name":              zorg,
                 "provisioned_storage_mb": vm["provisioned_storage_mb"],
                 "provisioned_storage_tb": vm["provisioned_storage_tb"],
-                "used_storage_mb":      vm["used_storage_mb"],
-                "used_storage_tb":      vm["used_storage_tb"],
-                "vpg_status":           (vm.get("vpg_statuses") or {}).get(vpg_name),
+                "used_storage_mb":        vm["used_storage_mb"],
+                "used_storage_tb":        vm["used_storage_tb"],
+                "vpg_status":             (vm.get("vpg_statuses") or {}).get(vpg_name),
             })
     return docs
 
@@ -658,6 +659,7 @@ def main() -> None:
         elif name.startswith("us"):
             site_by_region["us"].append(doc)
         else:
+            log.warning("Site '%s' could not be routed (name doesn't start with uk/us) — skipped.", doc.get("site_name"))
             site_by_region["unknown"].append(doc)
 
     for region, es in es_clients.items():
