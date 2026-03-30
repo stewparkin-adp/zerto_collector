@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Contains credentials — keep local only
+azure_setup.sh
