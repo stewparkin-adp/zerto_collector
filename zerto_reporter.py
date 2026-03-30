@@ -575,8 +575,6 @@ def main() -> None:
     zerto_password = secrets["zerto-password"]
     es_uk_host     = secrets["es-uk-host"]
     # es_uk_api_key  = secrets["es-uk-api-key"]
-    es_us_host     = secrets["es-us-host"]
-    # es_us_api_key  = secrets["es-us-api-key"]
 
     now = datetime.now(tz=timezone.utc)
     report_start = now - timedelta(hours=REPORT_HOURS)
@@ -585,19 +583,23 @@ def main() -> None:
     snapshot_id = str(uuid.uuid4())
     log.info("Snapshot ID: %s", snapshot_id)
 
-    # --- Connect to Elasticsearch (UK + US) ---
-    es_clients = {}
-    for region, host, api_key in [
-        ("uk", es_uk_host, None),
-        ("us", es_us_host, None),
-    ]:
-        log.info("Connecting to %s Elasticsearch at %s ...", region.upper(), host)
-        client = get_es_client(host, api_key)
-        if not client.ping():
-            log.error("Cannot reach %s Elasticsearch at %s.", region.upper(), host)
-            sys.exit(1)
-        es_clients[region] = client
-        log.info("%s Elasticsearch connection OK.", region.upper())
+    # --- Connect to UK Elasticsearch (direct) ---
+    log.info("Connecting to UK Elasticsearch at %s ...", es_uk_host)
+    es_uk = get_es_client(es_uk_host, None)
+    if not es_uk.ping():
+        log.error("Cannot reach UK Elasticsearch at %s.", es_uk_host)
+        sys.exit(1)
+    log.info("UK Elasticsearch connection OK.")
+    es_clients = {"uk": es_uk}
+
+    # --- Check US proxy is reachable ---
+    log.info("Checking US proxy at %s ...", US_PROXY_URL)
+    try:
+        requests.get(US_PROXY_URL, timeout=10)
+        log.info("US proxy OK.")
+    except requests.RequestException as exc:
+        log.error("Cannot reach US proxy at %s: %s", US_PROXY_URL, exc)
+        sys.exit(1)
 
     # --- Connect to Zerto Analytics API ---
     zerto = ZertoAnalyticsClient(zerto_username, zerto_password)
