@@ -423,7 +423,7 @@ def es_snapshot_zerto(site_docs: list, account_doc: dict, snapshot_id: str, site
             "is_connected":           site["is_connected"],
             "is_transmission_enabled": site["is_transmission_enabled"],
             "zorgs_count":            site["zorgs_count"],
-            "zorg_name":              (site_zorg_map or {}).get(site["site_name"]),
+            "zorg_name":              (site_zorg_map or {}).get(site["site_id"]),
             # Account-level totals on every site doc for easy filtering
             "account_total_vpgs":     account_doc["total_vpgs_count"],
             "account_total_vms":      account_doc["total_vms_count"],
@@ -607,10 +607,10 @@ def main() -> None:
 
     site_zorg_map = {}
     for vpg in vpg_docs:
-        ps_name = (vpg.get("protected_site") or {}).get("name")
+        ps_id = (vpg.get("protected_site") or {}).get("identifier")
         zorg = vpg.get("zorg_name")
-        if ps_name and zorg and ps_name not in site_zorg_map:
-            site_zorg_map[ps_name] = zorg
+        if ps_id and zorg and ps_id not in site_zorg_map:
+            site_zorg_map[ps_id] = zorg
 
     all_item_docs = es_snapshot_zerto_item(vm_docs, vpg_docs, snapshot_id)
 
