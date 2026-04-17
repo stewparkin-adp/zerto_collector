@@ -406,7 +406,7 @@ def print_hierarchy(account_doc: dict, site_docs: list, vpg_docs: list, vm_docs:
 # Elasticsearch document builders
 # ---------------------------------------------------------------------------
 
-def es_snapshot_zerto(site_docs: list, account_doc: dict, snapshot_id: str) -> list:
+def es_snapshot_zerto(site_docs: list, account_doc: dict, snapshot_id: str, site_zorg_map: dict = None) -> list:
     """One document per site for the snapshot_zerto index."""
     docs = []
     for site in site_docs:
@@ -423,6 +423,7 @@ def es_snapshot_zerto(site_docs: list, account_doc: dict, snapshot_id: str) -> l
             "is_connected":           site["is_connected"],
             "is_transmission_enabled": site["is_transmission_enabled"],
             "zorgs_count":            site["zorgs_count"],
+            "zorg_name":              (site_zorg_map or {}).get(site["site_name"]),
             # Account-level totals on every site doc for easy filtering
             "account_total_vpgs":     account_doc["total_vpgs_count"],
             "account_total_vms":      account_doc["total_vms_count"],
@@ -604,12 +605,19 @@ def main() -> None:
     # --- Filter docs to this region only ---
     log.info("Indexing %s data to Elasticsearch (snapshot_id: %s) ...", region.upper(), snapshot_id)
 
+    site_zorg_map = {}
+    for vpg in vpg_docs:
+        ps_name = (vpg.get("protected_site") or {}).get("name")
+        zorg = vpg.get("zorg_name")
+        if ps_name and zorg and ps_name not in site_zorg_map:
+            site_zorg_map[ps_name] = zorg
+
     all_item_docs = es_snapshot_zerto_item(vm_docs, vpg_docs, snapshot_id)
 
     vpg_es_docs  = [d for d in es_snapshot_zerto_vpg(vpg_docs, snapshot_id)
                     if zorg_region(d.get("zorg_name")) == region]
     item_es_docs = [d for d in all_item_docs if zorg_region(d.get("zorg_name")) == region]
-    site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id)
+    site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id, site_zorg_map)
                     if (d.get("site_name") or "").lower().startswith(region)]
 
     log.info("Indexing — sites: %d  VPGs: %d  VMs: %d",
