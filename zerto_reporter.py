@@ -618,7 +618,7 @@ def main() -> None:
                     if zorg_region(d.get("zorg_name")) == region]
     item_es_docs = [d for d in all_item_docs if zorg_region(d.get("zorg_name")) == region]
     site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id, site_zorg_map)
-                    if (d.get("site_name") or "").lower().startswith(region)]
+                    if zorg_region(d.get("zorg_name")) == region]
 
     log.info("Indexing — sites: %d  VPGs: %d  VMs: %d",
              len(site_es_docs), len(vpg_es_docs), len(item_es_docs))
