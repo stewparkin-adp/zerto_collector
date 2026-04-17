@@ -504,6 +504,47 @@ def es_snapshot_zerto_item(vm_docs: list, vpg_docs: list, snapshot_id: str) -> l
     return docs
 
 
+def es_snapshot_zerto_zorg(vpg_docs: list, item_docs: list, snapshot_id: str) -> list:
+    """One document per ZORG for the snapshot_zerto_zorg index."""
+    from collections import defaultdict
+
+    zorg_vpgs = defaultdict(list)
+    for vpg in vpg_docs:
+        zorg = vpg.get("zorg_name")
+        if zorg:
+            zorg_vpgs[zorg].append(vpg)
+
+    # Dedupe VMs per zorg by vm_id to avoid double-counting VMs in multiple VPGs
+    zorg_vms = defaultdict(dict)
+    for item in item_docs:
+        zorg = item.get("zorg_name")
+        vm_id = item.get("vm_id")
+        if zorg and vm_id and vm_id not in zorg_vms[zorg]:
+            zorg_vms[zorg][vm_id] = item
+
+    ts = vpg_docs[0]["@timestamp"] if vpg_docs else item_docs[0]["@timestamp"] if item_docs else None
+
+    docs = []
+    for zorg, vpgs in zorg_vpgs.items():
+        statuses = [v.get("protection_status") for v in vpgs]
+        rpos = [v["actual_rpo_seconds"] for v in vpgs if v.get("actual_rpo_seconds") is not None]
+        vms = list(zorg_vms[zorg].values())
+        docs.append({
+            "snapshot_id":              snapshot_id,
+            "@timestamp":               ts,
+            "zorg_name":                zorg,
+            "vpgs_count":               len(vpgs),
+            "vms_count":                len(vms),
+            "healthy_vpgs_count":       statuses.count("Meeting SLA"),
+            "alerted_vpgs_count":       statuses.count("Not Meeting SLA"),
+            "faulted_vpgs_count":       statuses.count("Error"),
+            "avg_actual_rpo_seconds":   round(sum(rpos) / len(rpos), 2) if rpos else None,
+            "provisioned_storage_tb":   round(sum(v["provisioned_storage_tb"] for v in vms), 6),
+            "used_storage_tb":          round(sum(v["used_storage_tb"] for v in vms), 6),
+        })
+    return docs
+
+
 # ---------------------------------------------------------------------------
 # Elasticsearch helpers
 # ---------------------------------------------------------------------------
@@ -619,13 +660,16 @@ def main() -> None:
     item_es_docs = [d for d in all_item_docs if zorg_region(d.get("zorg_name")) == region]
     site_es_docs = [d for d in es_snapshot_zerto(site_docs, account_doc, snapshot_id, site_zorg_map)
                     if zorg_region(d.get("zorg_name")) == region]
+    zorg_es_docs = [d for d in es_snapshot_zerto_zorg(vpg_docs, all_item_docs, snapshot_id)
+                    if zorg_region(d.get("zorg_name")) == region]
 
-    log.info("Indexing — sites: %d  VPGs: %d  VMs: %d",
-             len(site_es_docs), len(vpg_es_docs), len(item_es_docs))
+    log.info("Indexing — sites: %d  VPGs: %d  VMs: %d  ZORGs: %d",
+             len(site_es_docs), len(vpg_es_docs), len(item_es_docs), len(zorg_es_docs))
 
     index_to_es(es, "snapshot_zerto",      site_es_docs)
     index_to_es(es, "snapshot_zerto_vpg",  vpg_es_docs)
     index_to_es(es, "snapshot_zerto_item", item_es_docs)
+    index_to_es(es, "snapshot_zerto_zorg", zorg_es_docs)
 
     log.info("Done.")
 
